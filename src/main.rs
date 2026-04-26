@@ -4,6 +4,8 @@ use std::{
     env::current_dir,
     fs::{ReadDir, read_dir},
     path::PathBuf,
+    sync::{Arc, Mutex},
+    thread::{self, JoinHandle},
 };
 
 fn main() {
@@ -45,18 +47,23 @@ fn main() {
         }
     };
 
-    println!("{recurse_check}");
-    let mut hmap: HashMap<Vec<u8>, Vec<PathBuf>> = HashMap::new();
+    let new_thing: Arc<Mutex<HashMap<Vec<u8>, Vec<PathBuf>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     //Take DirEntry and generate a hashmap that has valus of vec<PathBuf> where
     //hashed file contents are the key's
-    hasher(files_iter, &mut hmap, recurse_check);
+    hasher(files_iter, new_thing.clone(), recurse_check);
 
     //Pass hmap into function that iterates over it and finds number of duplicates
     //prints total number of duplicate file instances then lists the paths to those files
-    find_duplicates_and_print(hmap);
+    find_duplicates_and_print(new_thing.clone());
 }
 
-fn hasher(files_iter: ReadDir, hmap: &mut HashMap<Vec<u8>, Vec<PathBuf>>, recurse_check: bool) {
+fn hasher(
+    files_iter: ReadDir,
+    hmap: Arc<Mutex<HashMap<Vec<u8>, Vec<PathBuf>>>>,
+    recurse_check: bool,
+) {
+    let mut thread_handles: Vec<JoinHandle<()>> = Vec::new();
     for file in files_iter {
         let f_res = match file {
             Ok(f) => f,
@@ -69,9 +76,16 @@ fn hasher(files_iter: ReadDir, hmap: &mut HashMap<Vec<u8>, Vec<PathBuf>>, recurs
                 Ok(d) => d,
                 Err(_) => continue,
             };
-            let hash_result = Sha256::digest(data).as_slice().to_vec();
-            let pbuf_vec = hmap.entry(hash_result).or_default();
-            pbuf_vec.push(file_path_buf);
+
+            let h_clone = Arc::clone(&hmap);
+
+            let thread_handle = thread::spawn(move || {
+                let mut hmap_guard = h_clone.lock().expect("error here 32");
+                let hash_result = Sha256::digest(data).as_slice().to_vec();
+                let pbuf_vec = hmap_guard.entry(hash_result).or_default();
+                pbuf_vec.push(file_path_buf);
+            });
+            thread_handles.push(thread_handle);
         } else {
             let new_dir = match read_dir(file_path_buf) {
                 Ok(i) => i,
@@ -81,17 +95,22 @@ fn hasher(files_iter: ReadDir, hmap: &mut HashMap<Vec<u8>, Vec<PathBuf>>, recurs
                 }
             };
             if recurse_check {
-                hasher(new_dir, hmap, recurse_check);
+                hasher(new_dir, hmap.clone(), recurse_check);
             } else {
                 continue;
             }
         }
     }
+
+    for handle in thread_handles {
+        handle.join().unwrap();
+    }
 }
 
-fn find_duplicates_and_print(hmap: HashMap<Vec<u8>, Vec<PathBuf>>) {
+fn find_duplicates_and_print(hmap: Arc<Mutex<HashMap<Vec<u8>, Vec<PathBuf>>>>) {
     let mut counter: u8 = 0;
-    hmap.values().for_each(|v| {
+    let h_guard = hmap.lock().unwrap();
+    h_guard.values().for_each(|v| {
         if v.len() > 1 {
             counter += 1
         }
@@ -99,7 +118,7 @@ fn find_duplicates_and_print(hmap: HashMap<Vec<u8>, Vec<PathBuf>>) {
 
     println!("Found {counter} duplicates:");
 
-    hmap.values().for_each(|v| {
+    h_guard.values().for_each(|v| {
         if v.len() > 1 {
             for p in v {
                 let x = p.to_str().expect("Non Unicode Chars in file path");
