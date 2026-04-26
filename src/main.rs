@@ -10,6 +10,8 @@ fn main() {
     //Grab user input in arguments
     let user_args: Vec<String> = std::env::args().collect();
 
+    let recurse_check: bool = user_args.iter().any(|x| x == "-r");
+
     //Set directory to cwd if no arg is passed or 2 arg passed in args vec
     let directory: String = if user_args.len() < 2 {
         match current_dir() {
@@ -26,7 +28,12 @@ fn main() {
             }
         }
     } else {
-        user_args[1].clone()
+        user_args
+            .iter()
+            .skip(1)
+            .find(|x| !x.starts_with("-"))
+            .expect("Directory error")
+            .to_string()
     };
 
     //go through all files in that dir and push them as DirEntry
@@ -38,18 +45,18 @@ fn main() {
         }
     };
 
+    println!("{recurse_check}");
+    let mut hmap: HashMap<Vec<u8>, Vec<PathBuf>> = HashMap::new();
     //Take DirEntry and generate a hashmap that has valus of vec<PathBuf> where
     //hashed file contents are the key's
-    let hmap = hasher(files_iter);
+    hasher(files_iter, &mut hmap, recurse_check);
 
     //Pass hmap into function that iterates over it and finds number of duplicates
     //prints total number of duplicate file instances then lists the paths to those files
     find_duplicates_and_print(hmap);
 }
 
-fn hasher(files_iter: ReadDir) -> HashMap<Vec<u8>, Vec<PathBuf>> {
-    let mut hmap: HashMap<Vec<u8>, Vec<PathBuf>> = HashMap::new();
-
+fn hasher(files_iter: ReadDir, hmap: &mut HashMap<Vec<u8>, Vec<PathBuf>>, recurse_check: bool) {
     for file in files_iter {
         let f_res = match file {
             Ok(f) => f,
@@ -65,10 +72,21 @@ fn hasher(files_iter: ReadDir) -> HashMap<Vec<u8>, Vec<PathBuf>> {
             let hash_result = Sha256::digest(data).as_slice().to_vec();
             let pbuf_vec = hmap.entry(hash_result).or_default();
             pbuf_vec.push(file_path_buf);
+        } else {
+            let new_dir = match read_dir(file_path_buf) {
+                Ok(i) => i,
+                Err(err) => {
+                    println!("Error with reading Directory: {err}");
+                    return;
+                }
+            };
+            if recurse_check {
+                hasher(new_dir, hmap, recurse_check);
+            } else {
+                continue;
+            }
         }
     }
-
-    hmap
 }
 
 fn find_duplicates_and_print(hmap: HashMap<Vec<u8>, Vec<PathBuf>>) {
