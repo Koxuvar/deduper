@@ -5,8 +5,6 @@ use std::{
     env::current_dir,
     fs::{ReadDir, read_dir},
     path::PathBuf,
-    sync::{Arc, Mutex},
-    thread::{self, JoinHandle},
 };
 
 fn main() {
@@ -15,7 +13,8 @@ fn main() {
 
     let recurse_check: bool = user_args.iter().any(|x| x == "-r");
 
-    //Set directory to cwd if no arg is passed or 2 arg passed in args vec
+    //Set directory to cwd if no arg is passed
+    //otherwise grab the first arg not starting with - and use that skipping first arg
     let directory: String = if user_args.len() < 2 {
         match current_dir() {
             Ok(s) => match s.to_str() {
@@ -48,65 +47,12 @@ fn main() {
         }
     };
 
-    /* let new_thing: Arc<Mutex<HashMap<Vec<u8>, Vec<PathBuf>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-    //Take DirEntry and generate a hashmap that has valus of vec<PathBuf> where
-    //hashed file contents are the key's
-    hasher(files_iter, new_thing.clone(), recurse_check); */
+    //Send that vec out and get back a hashmap
     let new_hmap = new_hasher(files_iter, recurse_check);
 
     //Pass hmap into function that iterates over it and finds number of duplicates
     //prints total number of duplicate file instances then lists the paths to those files
     find_duplicates_and_print(new_hmap);
-}
-
-fn hasher(
-    files_iter: ReadDir,
-    hmap: Arc<Mutex<HashMap<Vec<u8>, Vec<PathBuf>>>>,
-    recurse_check: bool,
-) {
-    let mut thread_handles: Vec<JoinHandle<()>> = Vec::new();
-    for file in files_iter {
-        let f_res = match file {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
-
-        let file_path_buf: PathBuf = f_res.path();
-        if file_path_buf.is_file() {
-            let data = match std::fs::read(&file_path_buf) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-
-            let h_clone = Arc::clone(&hmap);
-
-            let thread_handle = thread::spawn(move || {
-                let mut hmap_guard = h_clone.lock().expect("error here 32");
-                let hash_result = Sha256::digest(data).as_slice().to_vec();
-                let pbuf_vec = hmap_guard.entry(hash_result).or_default();
-                pbuf_vec.push(file_path_buf);
-            });
-            thread_handles.push(thread_handle);
-        } else {
-            let new_dir = match read_dir(file_path_buf) {
-                Ok(i) => i,
-                Err(err) => {
-                    println!("Error with reading Directory: {err}");
-                    return;
-                }
-            };
-            if recurse_check {
-                hasher(new_dir, hmap.clone(), recurse_check);
-            } else {
-                continue;
-            }
-        }
-    }
-
-    for handle in thread_handles {
-        handle.join().unwrap();
-    }
 }
 
 fn new_hasher(files_iter: ReadDir, recurse_check: bool) -> HashMap<Vec<u8>, Vec<PathBuf>> {
@@ -119,6 +65,11 @@ fn new_hasher(files_iter: ReadDir, recurse_check: bool) -> HashMap<Vec<u8>, Vec<
         });
     }
 
+    //set up parallel computes with rayon and hash the file if its a file
+    //use that hash as a key and the file path in a vec<PathBuf> as the value
+    //if the file is a dir pass that into this function
+    //
+    //returns a hashmap that gets exteneded on to a master hashmap in the reduce
     let new_hmap = file_paths
         .into_par_iter()
         .fold(
@@ -166,7 +117,8 @@ fn new_hasher(files_iter: ReadDir, recurse_check: bool) -> HashMap<Vec<u8>, Vec<
 
 fn find_duplicates_and_print(hmap: HashMap<Vec<u8>, Vec<PathBuf>>) {
     let mut counter: u8 = 0;
-    // let h_guard = hmap.lock().unwrap();
+
+    //increase counter for each value where the vec in v is greater than 1
     hmap.values().for_each(|v| {
         if v.len() > 1 {
             counter += 1
@@ -175,6 +127,7 @@ fn find_duplicates_and_print(hmap: HashMap<Vec<u8>, Vec<PathBuf>>) {
 
     println!("Found {counter} duplicates:");
 
+    //print out each path to the console
     hmap.values().for_each(|v| {
         if v.len() > 1 {
             for p in v {
