@@ -1,45 +1,30 @@
+use clap::Parser;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    env::current_dir,
     fs::{ReadDir, read_dir},
     path::PathBuf,
 };
 
+#[derive(Parser)]
+#[command(version, about, long_about=None)]
+struct Args {
+    #[arg(default_value = ".")]
+    directory: String,
+
+    #[arg(short = 'r', long)]
+    recursive: bool,
+
+    #[arg(long, num_args = 1..)]
+    exclude_ext: Vec<String>,
+}
+
 fn main() {
-    //Grab user input in arguments
-    let user_args: Vec<String> = std::env::args().collect();
-
-    let recurse_check: bool = user_args.iter().any(|x| x == "-r");
-
-    //Set directory to cwd if no arg is passed
-    //otherwise grab the first arg not starting with - and use that skipping first arg
-    let directory: String = if user_args.len() < 2 {
-        match current_dir() {
-            Ok(s) => match s.to_str() {
-                Some(s) => s.to_string(),
-                None => {
-                    println!("Error Occured");
-                    return;
-                }
-            },
-            Err(err) => {
-                println!("Error occured: {err}");
-                return;
-            }
-        }
-    } else {
-        user_args
-            .iter()
-            .skip(1)
-            .find(|x| !x.starts_with("-"))
-            .expect("Directory error")
-            .to_string()
-    };
+    let args = Args::parse();
 
     //go through all files in that dir and push them as DirEntry
-    let files_iter = match read_dir(directory) {
+    let files_iter = match read_dir(args.directory) {
         Ok(i) => i,
         Err(err) => {
             println!("Error with reading Directory: {err}");
@@ -48,7 +33,7 @@ fn main() {
     };
 
     //Send that vec out and get back a hashmap
-    let new_hmap = new_hasher(files_iter, recurse_check);
+    let new_hmap = new_hasher(files_iter, args.recursive);
 
     //Pass hmap into function that iterates over it and finds number of duplicates
     //prints total number of duplicate file instances then lists the paths to those files
